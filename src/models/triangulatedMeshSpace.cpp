@@ -130,6 +130,25 @@ void triangulatedMeshSpace::randomVectorAtPosition(meshPosition &p, vector3 &v, 
     v = noise.getRealNormal()*orthogonalizer+noise.getRealNormal()*tangent2;
     }
 
+void triangulatedMeshSpace::rotateVectorAtPosition(meshPosition &p, vector3 &v, double angle)
+    {
+    pmpFaceLocation positionLocation = meshPositionToFaceLocation(p);
+    faceIndex f = positionLocation.first;
+    //using built-in functions guarantees this will be the outward unit normal
+    vector3 normal = PMP::compute_face_normal(f, surface);
+
+    std::vector<point3> axis;
+    axis.reserve(2);
+    point3 origin = point3(0,0,0);
+    axis.push_back(origin);
+    axis.push_back(origin+normal); //goal is to move the velocity to point from origin out, rotate it, cut and glue to original pos
+
+    //perform the rotation
+    vector3 newVelocity(origin, rotateAboutAxis(origin + v, axis, angle));
+    //overwrite original vector with rotated version, which should be of the same magnitude
+    v = newVelocity;
+    }
+
 void triangulatedMeshSpace::convertToEuclideanPositions(std::vector<meshPosition> &a, std::vector<meshPosition> &b)
     {
     int N = a.size();
@@ -404,7 +423,7 @@ void triangulatedMeshSpace::projectVectorsIfOverBoundary(vector<vector3> &vector
         double vAndPerpDot = v*orthogonal;
         bool vAlongPerp = (vAndPerpDot > 0);
         if ((pointsOut && vAlongPerp) || (!pointsOut && !vAlongPerp)) 
-            projectVectorOrthongonalToDirection(v,orthogonal);
+            projectVectorOrthogonalToDirection(v,orthogonal);
         vectors[i] = v;
         }
     }
@@ -714,23 +733,26 @@ void triangulatedMeshSpace::transportParticleAndVectors(meshPosition &pos, vecto
             targetNormal = PMP::compute_face_normal(provisionalTargetFace,surface);
             double normalDotProduct = currentSourceNormal*targetNormal;
             double angle = acos(normalDotProduct);
-            if (normalDotProduct >= 1) 
-                angle = 0; //clamp for robustness against precision errors for very similar normals
-            vector3 axisVector = CGAL::cross_product(currentSourceNormal,targetNormal);
-            axisVector /= vectorMagnitude(axisVector); //this could use normalize if we wanted to
-            std::vector<point3> axis = {sourcePoint, sourcePoint+axisVector};
+           
+	    if (angle >= 1) cout << "two faces have the same normal, not rotating" << endl;
 
-            target = rotateAboutAxis(target, axis, angle);
-            displacementVector = vector3(sourcePoint, target); //move gets updated here
+	    //only perform a rotation if the normals of the two faces are actually different
+            if (normalDotProduct < 1) 
+	        {
+                vector3 axisVector = CGAL::cross_product(currentSourceNormal,targetNormal);
+	        axisVector /= vectorMagnitude(axisVector); //this could use normalize if we wanted to
+                std::vector<point3> axis = {sourcePoint, sourcePoint+axisVector};
 
-            for (int i = 0; i < transportVectors.size(); i++) 
-                {
-                vector3 vTr = transportVectors[i];
-                point3 vTrTarget = sourcePoint + vTr;
-                vTrTarget = rotateAboutAxis(vTrTarget, axis, angle);
-                transportVectors[i] = vector3(sourcePoint, vTrTarget);
+                target = rotateAboutAxis(target, axis, angle);
+                displacementVector = vector3(sourcePoint, target); //move gets updated here
+		for (int i = 0; i < transportVectors.size(); i++) 
+                    {
+                    vector3 vTr = transportVectors[i];
+                    point3 vTrTarget = sourcePoint + vTr;
+                    vTrTarget = rotateAboutAxis(vTrTarget, axis, angle);
+                    transportVectors[i] = vector3(sourcePoint, vTrTarget);
+                    }
                 }
-
             //if we've gone through an edge, it can be excluded from future intersection checks
             lastUsedHalfedge = intersectedEdge;        
             }
@@ -747,19 +769,22 @@ void triangulatedMeshSpace::transportParticleAndVectors(meshPosition &pos, vecto
             //we don't need any of these if there are no vectors to transport
             if (transportVectors.size() > 0)
                 {  
-                vector3 axisVector = normalize(CGAL::cross_product(currentSourceNormal,targetNormal)); 
-                vector<point3> axis = {sourcePoint, sourcePoint+axisVector}; 
                 double normalDotProduct = currentSourceNormal*targetNormal;
                 double angle = acos(normalDotProduct);
-                if (normalDotProduct >= 1) angle = 0; 
+                if (normalDotProduct < 1) 
+                    { 
+                    
+	            vector3 axisVector = normalize(CGAL::cross_product(currentSourceNormal,targetNormal)); 
+	 	    vector<point3> axis = {sourcePoint, sourcePoint+axisVector}; 
 
-                for (int i = 0; i < transportVectors.size(); i++)
-                    {
-                    vector3 vTr = transportVectors[i];
-                    point3 vTrTarget = sourcePoint + vTr;
-                    vTrTarget = rotateAboutAxis(vTrTarget, axis, angle);
-                    transportVectors[i] = vector3(sourcePoint, vTrTarget);
-                    }
+                    for (int i = 0; i < transportVectors.size(); i++)
+                        {
+                        vector3 vTr = transportVectors[i];
+                        point3 vTrTarget = sourcePoint + vTr;
+                        vTrTarget = rotateAboutAxis(vTrTarget, axis, angle);
+                        transportVectors[i] = vector3(sourcePoint, vTrTarget);
+                        }
+		    }
                 }	   
 
             lastUsedHalfedge = nullHalfedge; 
